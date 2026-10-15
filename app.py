@@ -9,51 +9,30 @@ import re
 from pathlib import Path
 from copy import copy
 
-
-
 import requests
 
-
-
 from PySide6.QtWidgets import (
-
     QApplication,
-
     QWidget,
-
     QLabel,
-
     QLineEdit,
-
     QPushButton,
-
     QTableWidget,
-
     QTableWidgetItem,
-
     QVBoxLayout,
-
     QHBoxLayout,
-
     QMessageBox,
-
     QProgressBar,
-
     QDialog,
-
     QTextEdit,
-
 )
-
-
-
 from PySide6.QtCore import QEvent
-
-
 
 from openpyxl import load_workbook
 from openpyxl.cell.cell import MergedCell
 
+# --- IMPORTAR EL ACTUALIZADOR DESDE TU OTRO ARCHIVO ---
+from actualizador import verificar_e_instalar_actualizacion
 
 
 
@@ -4754,27 +4733,17 @@ class DCOApp(QWidget):
 
 
 if __name__ == "__main__":
-
-
-
     app = QApplication(
-
         sys.argv
-
     )
 
-
+    # --- VERIFICAR ACTUALIZACIÓN ANTES DE ABRIR LA APP ---
+    verificar_e_instalar_actualizacion(parent=None)
 
     ventana = DCOApp()
 
-
-
     ventana.show()
 
-
-
     sys.exit(
-
         app.exec()
-
     )
