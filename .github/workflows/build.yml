@@ -1,23 +1,66 @@
-name: Build Windows Executable
-on: [push]
+name: Compilar Multiplataforma (Windows y Mac)
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
 jobs:
   build-windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      
       - name: Configurar Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+          
       - name: Instalar dependencias
         run: |
           python -m pip install --upgrade pip
           pip install requests openpyxl PySide6 pyinstaller
-      - name: Compilar con PyInstaller
+          
+      - name: Compilar con PyInstaller (Windows)
         run: |
           pyinstaller --noconsole --onedir --name="DCO_Expedientes" app.py
-      - name: Subir artefacto
+          
+      - name: Comprimir artefacto de Windows
+        run: |
+          Compress-Archive -Path dist/DCO_Expedientes -DestinationPath DCO_Expedientes_Windows.zip
+          
+      - name: Subir artefacto Windows
         uses: actions/upload-artifact@v4
         with:
           name: DCO_Expedientes_Windows
-          path: dist/DCO_Expedientes/
+          path: DCO_Expedientes_Windows.zip
+
+  build-mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests openpyxl PySide6 pyinstaller
+          
+      - name: Compilar con PyInstaller (Mac)
+        run: |
+          pyinstaller --noconsole --onedir --name="DCO_Expedientes" app.py
+          
+      - name: Comprimir artefacto de Mac
+        run: |
+          cd dist
+          zip -r ../DCO_Expedientes_Mac.zip DCO_Expedientes.app
+          
+      - name: Subir artefacto Mac
+        uses: actions/upload-artifact@v4
+        with:
+          name: DCO_Expedientes_Mac
+          path: DCO_Expedientes_Mac.zip
