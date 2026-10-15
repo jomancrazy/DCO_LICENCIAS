@@ -1,0 +1,23 @@
+name: Build Windows Executable
+on: [push]
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests openpyxl PySide6 pyinstaller
+      - name: Compilar con PyInstaller
+        run: |
+          pyinstaller --noconsole --onedir --name="DCO_Expedientes" app.py
+      - name: Subir artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: DCO_Expedientes_Windows
+          path: dist/DCO_Expedientes/
