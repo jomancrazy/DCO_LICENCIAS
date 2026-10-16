@@ -1543,7 +1543,7 @@ class DCOApp(QWidget):
 
         self.setWindowTitle(
 
-            "DCO - Consulta de Expedientes V1.0.2"
+            "DCO - Consulta de Expedientes V1.0.0"
 
         )
 
@@ -4732,18 +4732,21 @@ class DCOApp(QWidget):
 
 
 
+
 if __name__ == "__main__":
-    app = QApplication(
-        sys.argv
+    app = QApplication(sys.argv)
+
+    # Comprobar actualizaciones antes de abrir la ventana.
+    # Si el actualizador inicia el cierre de la aplicación,
+    # no abrir la ventana principal.
+    actualizacion_iniciada = verificar_e_instalar_actualizacion(
+        parent=None
     )
 
-    # --- VERIFICAR ACTUALIZACIÓN ANTES DE ABRIR LA APP ---
-    verificar_e_instalar_actualizacion(parent=None)
+    if actualizacion_iniciada:
+        sys.exit(0)
 
     ventana = DCOApp()
-
     ventana.show()
 
-    sys.exit(
-        app.exec()
-    )
+    sys.exit(app.exec())
