@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 # CONFIGURACIÓN
 # ============================================================
 
-VERSION_ACTUAL = "1.0.0"
+VERSION_ACTUAL = "1.0.1"
 
 VERSION_URL = (
     "https://raw.githubusercontent.com/"

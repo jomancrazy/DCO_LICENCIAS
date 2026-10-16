@@ -1543,7 +1543,7 @@ class DCOApp(QWidget):
 
         self.setWindowTitle(
 
-            "DCO - Consulta de Expedientes V1.0.0"
+            "DCO - Consulta de Expedientes V1.0.1"
 
         )
 
