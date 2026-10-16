@@ -7,7 +7,7 @@ from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import QProgressDialog, QMessageBox
 
 # Versión actual de tu aplicación
-VERSION_ACTUAL = "1.0.1"
+VERSION_ACTUAL = "1.0.0"
 VERSION_URL = "https://raw.githubusercontent.com/jomancrazy/DCO_LICENCIAS/main/version.txt"
 
 # URLs de descarga directa desde tus GitHub Releases
