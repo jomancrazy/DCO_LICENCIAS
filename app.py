@@ -45,7 +45,7 @@ from actualizador import verificar_e_instalar_actualizacion
 
 
 
-BASE_URL = "https://dco-munixela.kodsoftware.com"
+BASE_URL = "https://dco.dducaimunixela.org/login_2.php"
 
 
 
@@ -1543,7 +1543,7 @@ class DCOApp(QWidget):
 
         self.setWindowTitle(
 
-            "DCO - Consulta de Expedientes V1.0.1"
+            "DCO - Consulta de Expedientes V1.0.2"
 
         )
 
