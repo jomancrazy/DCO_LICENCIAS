@@ -18,7 +18,7 @@ from PySide6.QtCore import QThread, Signal, QEventLoop, Qt
 from PySide6.QtWidgets import QMessageBox, QProgressDialog
 
 # Cambiar en CADA nueva compilación publicada.
-VERSION_ACTUAL = "1.0.3"
+VERSION_ACTUAL = "1.0.4"
 REPOSITORIO = "jomancrazy/DCO_LICENCIAS"
 VERSION_URL = f"https://raw.githubusercontent.com/{REPOSITORIO}/main/version.txt"
 NOMBRE_ZIP_WINDOWS = "DCO_Expedientes_Windows.zip"
