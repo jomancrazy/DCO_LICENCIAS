@@ -26,13 +26,13 @@ from PySide6.QtWidgets import (
     QDialog,
     QTextEdit,
 )
-from PySide6.QtCore import QEvent
+from PySide6.QtCore import QEvent, QTimer
 
 from openpyxl import load_workbook
 from openpyxl.cell.cell import MergedCell
 
 # --- IMPORTAR EL ACTUALIZADOR DESDE TU OTRO ARCHIVO ---
-from actualizador import verificar_e_instalar_actualizacion
+from actualizador import VERSION_ACTUAL, MonitorActualizaciones
 
 
 
@@ -1207,6 +1207,12 @@ def extraer_campos_editar_finalizado(
 
         "VISITAS_MINIMAS",
 
+        # Número de colegiado del profesional planificador
+        "colegiado_planificado",
+        "COLEGIADO_PLANIFICADO",
+        "colegiado_planificador",
+        "COLEGIADO_PLANIFICADOR",
+
     ]
 
 
@@ -1543,7 +1549,7 @@ class DCOApp(QWidget):
 
         self.setWindowTitle(
 
-            "DCO - Consulta de Expedientes V1.0.4"
+            f"DCO - Consulta de Expedientes V{VERSION_ACTUAL}"
 
         )
 
@@ -1579,7 +1585,19 @@ class DCOApp(QWidget):
 
 
 
+        # Estados de operaciones activas: nunca interrumpir una exportación.
+        self._login_activo = False
+        self._busqueda_activa = False
+        self._pdf_activo = False
+        self._excel_activo = False
+
         self.crear_interfaz()
+
+        # El monitor consulta GitHub sin congelar la ventana.
+        self.monitor_actualizaciones = MonitorActualizaciones(
+            parent=self,
+            puede_notificar=self.puede_mostrar_actualizacion,
+        )
 
         # Iniciar sesión automáticamente
 
@@ -1587,6 +1605,21 @@ class DCOApp(QWidget):
 
 
 
+
+
+    def puede_mostrar_actualizacion(self):
+        """La ventana de actualización solo aparece si no hay tareas en curso."""
+        return not any((
+            self._login_activo,
+            self._busqueda_activa,
+            self._pdf_activo,
+            self._excel_activo,
+        ))
+
+
+    def comprobar_actualizaciones_manualmente(self):
+        """Botón opcional para comprobar la versión sin reiniciar DCO."""
+        self.monitor_actualizaciones.comprobar(manual=True)
 
 
     # ========================================================
@@ -1851,7 +1884,12 @@ class DCOApp(QWidget):
 
         )
 
-
+        # Permite solicitar una revisión sin cerrar la aplicación.
+        self.actualizar_button = QPushButton("BUSCAR ACTUALIZACIONES")
+        self.actualizar_button.clicked.connect(
+            self.comprobar_actualizaciones_manualmente
+        )
+        fila_botones.addWidget(self.actualizar_button)
 
         layout_principal.addLayout(
 
@@ -1947,7 +1985,7 @@ class DCOApp(QWidget):
 
     ):
 
-
+        self._login_activo = True
 
         self.progreso.setValue(
 
@@ -2187,6 +2225,7 @@ class DCOApp(QWidget):
 
 
 
+        self._busqueda_activa = True
         self.buscar_button.setEnabled(
 
             False
@@ -2391,8 +2430,7 @@ class DCOApp(QWidget):
 
         ):
 
-
-
+            self._login_activo = False
             self.progreso.setValue(
 
                 100 if event.exito else 0
@@ -2459,8 +2497,7 @@ class DCOApp(QWidget):
 
             ):
 
-
-
+                self._excel_activo = False
                 self.excel_button.setEnabled(
 
                     True
@@ -2533,8 +2570,7 @@ class DCOApp(QWidget):
 
             ):
 
-
-
+                self._excel_activo = False
                 self.excel_button.setEnabled(
 
                     True
@@ -2597,8 +2633,7 @@ class DCOApp(QWidget):
 
             # ------------------------------------------------
 
-
-
+            self._busqueda_activa = False
             self.buscar_button.setEnabled(
 
                 True
@@ -2645,8 +2680,7 @@ class DCOApp(QWidget):
 
         ):
 
-
-
+            self._pdf_activo = False
             self.progreso.setValue(
 
                 100
@@ -3159,6 +3193,7 @@ class DCOApp(QWidget):
 
 
 
+        self._pdf_activo = True
         self.pdf_button.setEnabled(
 
             False
@@ -3577,6 +3612,7 @@ class DCOApp(QWidget):
 
 
 
+        self._excel_activo = True
         self.excel_button.setEnabled(
 
             False
@@ -3661,11 +3697,11 @@ class DCOApp(QWidget):
 
 
 
-            datos_completos.update(
-
-                campos_adicionales
-
-            )
+            # Mantener los datos originales cuando un campo adicional venga vacío.
+            # Así no se pierde el colegiado recibido en la búsqueda principal.
+            for clave, contenido in campos_adicionales.items():
+                if contenido != "" or clave not in datos_completos:
+                    datos_completos[clave] = contenido
 
 
 
@@ -3834,6 +3870,15 @@ class DCOApp(QWidget):
         )
 
 
+
+        # Buscar el colegiado del planificador en los datos del expediente.
+        # Se admiten variaciones frecuentes del nombre del campo.
+        colegiado_planificado = (
+            valor(datos, "colegiado_planificado")
+            or valor(datos, "COLEGIADO_PLANIFICADO")
+            or valor(datos, "colegiado_planificador")
+            or valor(datos, "COLEGIADO_PLANIFICADOR")
+        )
 
         tipo_ejecutor, ejecutor = (
 
@@ -4547,6 +4592,9 @@ class DCOApp(QWidget):
 
         colocar("PLANIFICADOR", planificador)
 
+        # Primera columna COLEGIADO de la fila 2 de BASE DE DATOS.
+        colocar("COLEGIADO", colegiado_planificado, 1)
+
 
 
         if tipo_planificador == "ING":
@@ -4574,6 +4622,10 @@ class DCOApp(QWidget):
 
 
         colocar("EJECUTOR", ejecutor)
+
+        # Copiar el mismo colegiado del planificador a la segunda columna
+        # COLEGIADO, correspondiente al ejecutor.
+        colocar("COLEGIADO", colegiado_planificado, 2)
 
 
 
@@ -4736,17 +4788,13 @@ class DCOApp(QWidget):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
 
-    # Comprobar actualizaciones antes de abrir la ventana.
-    # Si el actualizador inicia el cierre de la aplicación,
-    # no abrir la ventana principal.
-    actualizacion_iniciada = verificar_e_instalar_actualizacion(
-        parent=None
-    )
-
-    if actualizacion_iniciada:
-        sys.exit(0)
-
+    # Mostrar la aplicación inmediatamente: el monitor NO bloquea el inicio.
     ventana = DCOApp()
     ventana.show()
+
+    # Comprueba GitHub tras abrir la ventana y, después, cada 30 minutos.
+    # Si está buscando o exportando, espera a terminar antes de avisar.
+    QTimer.singleShot(1200, ventana.monitor_actualizaciones.iniciar)
+    app.aboutToQuit.connect(ventana.monitor_actualizaciones.detener)
 
     sys.exit(app.exec())
