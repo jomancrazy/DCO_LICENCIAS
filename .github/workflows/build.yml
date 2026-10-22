@@ -1,35 +1,46 @@
+
 name: Compilar Multiplataforma (Windows y Mac)
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   workflow_dispatch:
 
 jobs:
   build-windows:
     runs-on: windows-latest
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
       - name: Configurar Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+
       - name: Instalar dependencias
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
           python -m pip install requests openpyxl PySide6 pyinstaller
-      - name: Pruebas de Feedback
+
+      - name: Pruebas de Feedback (si existen)
+        if: ${{ hashFiles('tests/test*.py', 'tests/**/test*.py') != '' }}
         shell: pwsh
-        run: python -m unittest discover -s tests -v
+        run: |
+          python -m unittest discover -s tests -v
+
       - name: Compilar Windows
         shell: pwsh
         run: |
-          pyinstaller --noconsole --onedir --name="DCO_Expedientes" app.py
+          pyinstaller --clean --noconfirm --noconsole --onedir --name="DCO_Expedientes" app.py
+
       - name: Crear ZIP compatible con actualizador
         shell: pwsh
         run: |
           Compress-Archive -Path "dist/DCO_Expedientes/*" -DestinationPath "DCO_Expedientes_Windows.zip" -Force
+
       - name: Verificar contenido ZIP
         shell: pwsh
         run: |
@@ -39,39 +50,55 @@ jobs:
             if (-not ($z.Entries.FullName -contains "DCO_Expedientes.exe")) {
               throw "Falta DCO_Expedientes.exe en la raiz del ZIP"
             }
-          } finally { $z.Dispose() }
+          } finally {
+            $z.Dispose()
+          }
+
       - name: Subir artefacto Windows
         uses: actions/upload-artifact@v4
         with:
           name: DCO_Expedientes_Windows
           path: DCO_Expedientes_Windows.zip
+          if-no-files-found: error
 
   build-mac:
     runs-on: macos-latest
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
       - name: Configurar Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+
       - name: Instalar dependencias
         run: |
           python -m pip install --upgrade pip
           python -m pip install requests openpyxl PySide6 pyinstaller
-      - name: Pruebas de Feedback
-        run: python -m unittest discover -s tests -v
+
+      - name: Pruebas de Feedback (si existen)
+        if: ${{ hashFiles('tests/test*.py', 'tests/**/test*.py') != '' }}
+        run: |
+          python -m unittest discover -s tests -v
+
       - name: Compilar Mac
         run: |
-          pyinstaller --noconsole --onedir --name="DCO_Expedientes" app.py
+          pyinstaller --clean --noconfirm --noconsole --onedir --name="DCO_Expedientes" app.py
+
       - name: Crear ZIP compatible con actualizador
         run: |
           cd dist
           ditto -c -k --sequesterRsrc --keepParent DCO_Expedientes.app ../DCO_Expedientes_Mac.zip
+
       - name: Verificar contenido ZIP
         run: |
-          unzip -Z -1 DCO_Expedientes_Mac.zip | grep -q '^DCO_Expedientes.app/Contents/'
+          unzip -Z -1 DCO_Expedientes_Mac.zip | grep '^DCO_Expedientes.app/Contents/' > /dev/null
+
       - name: Subir artefacto Mac
         uses: actions/upload-artifact@v4
         with:
           name: DCO_Expedientes_Mac
           path: DCO_Expedientes_Mac.zip
+          if-no-files-found: error
