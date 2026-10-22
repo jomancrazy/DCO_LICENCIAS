@@ -53,7 +53,7 @@ from feedback import MonitorFeedback
 
 
 
-BASE_URL = "https://dco-munixela.kodsoftware.com"
+BASE_URL = "https://dco.dducaimunixela.org"
 
 
 
