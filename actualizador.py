@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
 # La versión de CADA compilación debe ser la que tenía al publicarse.
 # Ejemplo: para crear el ejecutable 1.0.3, cambiar a "1.0.3"
 # ANTES de compilarlo; la compilación 1.0.2 debe seguir diciendo 1.0.2.
-VERSION_ACTUAL = "1.0.5"
+VERSION_ACTUAL = "1.0.6"
 
 # Comprobar actualizaciones mientras la aplicación está abierta.
 INTERVALO_REVISION_MS = 30 * 60 * 1000  # 30 minutos

@@ -1,11 +1,13 @@
 import sys
 import os
-import tempfile
 import subprocess
 import threading
 import platform
 import unicodedata
 import re
+import sqlite3
+import time
+from datetime import datetime
 from pathlib import Path
 from copy import copy
 
@@ -25,14 +27,19 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QDialog,
     QTextEdit,
+    QListWidget,
+    QListWidgetItem,
+    QSplitter,
+    QFrame,
 )
-from PySide6.QtCore import QEvent, QTimer
+from PySide6.QtCore import QEvent, QTimer, Qt, QStandardPaths
 
 from openpyxl import load_workbook
 from openpyxl.cell.cell import MergedCell
 
 # --- IMPORTAR EL ACTUALIZADOR DESDE TU OTRO ARCHIVO ---
 from actualizador import VERSION_ACTUAL, MonitorActualizaciones
+from metricas import PanelMetricas
 
 
 
@@ -66,12 +73,6 @@ BUSQUEDA_URL = (
     + "buscar_opciones.php"
 
 )
-
-
-
-PDF_URL = BASE_URL + "/detalle_exp_pdf.php"
-
-
 
 
 
@@ -370,46 +371,6 @@ class SearchEvent(QEvent):
 
 
         self.resultados = resultados
-
-        self.mensaje = mensaje
-
-
-
-
-
-class PdfEvent(QEvent):
-
-
-
-    EVENT_TYPE = QEvent.Type(
-
-        QEvent.registerEventType()
-
-    )
-
-
-
-    def __init__(
-
-        self,
-
-        archivo=None,
-
-        mensaje=""
-
-    ):
-
-
-
-        super().__init__(
-
-            self.EVENT_TYPE
-
-        )
-
-
-
-        self.archivo = archivo
 
         self.mensaje = mensaje
 
@@ -1259,132 +1220,6 @@ def extraer_campos_editar_finalizado(
 
 # ============================================================
 
-# ABRIR ARCHIVO
-
-# ============================================================
-
-
-
-def abrir_archivo(
-
-    ruta
-
-):
-
-
-
-    if not ruta:
-
-
-
-        return False
-
-
-
-    ruta = os.path.abspath(
-
-        ruta
-
-    )
-
-
-
-    if not os.path.exists(
-
-        ruta
-
-    ):
-
-
-
-        return False
-
-
-
-    sistema = platform.system()
-
-
-
-    try:
-
-
-
-        if sistema == "Windows":
-
-
-
-            os.startfile(
-
-                ruta
-
-            )
-
-
-
-        elif sistema == "Darwin":
-
-
-
-            subprocess.run(
-
-                [
-
-                    "open",
-
-                    ruta
-
-                ],
-
-                check=False
-
-            )
-
-
-
-        elif sistema == "Linux":
-
-
-
-            subprocess.run(
-
-                [
-
-                    "xdg-open",
-
-                    ruta
-
-                ],
-
-                check=False
-
-            )
-
-
-
-        else:
-
-
-
-            return False
-
-
-
-        return True
-
-
-
-    except Exception:
-
-
-
-        return False
-
-
-
-
-
-# ============================================================
-
 # MOSTRAR ARCHIVO EN EXPLORADOR
 
 # ============================================================
@@ -1525,6 +1360,107 @@ def mostrar_archivo_en_explorador(
 
 # ============================================================
 
+
+# ============================================================
+# RECONEXIÓN AUTOMÁTICA E HISTORIAL LOCAL
+# ============================================================
+
+INTERVALO_CONEXION_MS = 3 * 60 * 1000
+
+
+class ConexionEvent(QEvent):
+    EVENT_TYPE = QEvent.Type(QEvent.registerEventType())
+
+    def __init__(self, ok, texto, monitor=False):
+        super().__init__(self.EVENT_TYPE)
+        self.ok = ok
+        self.texto = texto
+        self.monitor = monitor
+
+
+class HistorialExportaciones:
+    """Historial privado por perfil del sistema operativo; no guarda contraseñas."""
+
+    COLUMNAS = (
+        "fecha", "expediente", "propietario", "direccion", "zona",
+        "tramite", "licencia", "licencia_suelo", "planificador", "ejecutor",
+        "colegiado", "archivo_excel", "hoja", "fila_excel",
+    )
+
+    def __init__(self):
+        ubicacion = QStandardPaths.writableLocation(
+            QStandardPaths.StandardLocation.AppDataLocation
+        )
+        if not ubicacion:
+            ubicacion = str(Path.home() / ".dco_expedientes")
+        carpeta = Path(ubicacion)
+        carpeta.mkdir(parents=True, exist_ok=True)
+        if os.name != "nt":
+            try:
+                carpeta.chmod(0o700)
+            except OSError:
+                pass
+        self.ruta = carpeta / "historial_exportaciones.sqlite3"
+        self._crear_tabla()
+        if os.name != "nt":
+            try:
+                self.ruta.chmod(0o600)
+            except OSError:
+                pass
+
+    def _abrir(self):
+        con = sqlite3.connect(str(self.ruta), timeout=15)
+        con.row_factory = sqlite3.Row
+        return con
+
+    def _crear_tabla(self):
+        with self._abrir() as con:
+            con.execute("""
+                CREATE TABLE IF NOT EXISTS exportaciones (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    fecha TEXT NOT NULL, expediente TEXT NOT NULL,
+                    propietario TEXT, direccion TEXT, zona TEXT, tramite TEXT,
+                    licencia TEXT, licencia_suelo TEXT, planificador TEXT,
+                    ejecutor TEXT, colegiado TEXT, archivo_excel TEXT,
+                    hoja TEXT, fila_excel INTEGER
+                )
+            """)
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS ix_historial_fecha "
+                "ON exportaciones(fecha DESC)"
+            )
+
+    def guardar(self, registro):
+        datos = {col: registro.get(col, "") for col in self.COLUMNAS}
+        datos["fecha"] = datetime.now().astimezone().isoformat(timespec="seconds")
+        columnas = ", ".join(self.COLUMNAS)
+        marcadores = ", ".join("?" for _ in self.COLUMNAS)
+        with self._abrir() as con:
+            con.execute(
+                f"INSERT INTO exportaciones ({columnas}) VALUES ({marcadores})",
+                tuple(datos[col] for col in self.COLUMNAS),
+            )
+
+    def listar(self, texto="", limite=250):
+        filtro = f"%{texto.strip()}%"
+        with self._abrir() as con:
+            filas = con.execute(
+                """SELECT id, fecha, expediente, propietario, licencia
+                   FROM exportaciones
+                   WHERE expediente LIKE ? OR propietario LIKE ? OR licencia LIKE ?
+                   ORDER BY id DESC LIMIT ?""",
+                (filtro, filtro, filtro, limite),
+            ).fetchall()
+            return [dict(fila) for fila in filas]
+
+    def obtener(self, identificador):
+        with self._abrir() as con:
+            fila = con.execute(
+                "SELECT * FROM exportaciones WHERE id=?", (identificador,)
+            ).fetchone()
+            return dict(fila) if fila else None
+
+
 # APLICACIÓN
 
 # ============================================================
@@ -1533,86 +1469,46 @@ def mostrar_archivo_en_explorador(
 
 class DCOApp(QWidget):
 
-
-
-    def __init__(
-
-        self
-
-    ):
-
-
-
+    def __init__(self):
         super().__init__()
+        self.setWindowTitle(f"DCO - Consulta de Expedientes V{VERSION_ACTUAL}")
+        self.resize(1330, 740)
 
-
-
-        self.setWindowTitle(
-
-            f"DCO - Consulta de Expedientes V{VERSION_ACTUAL}"
-
-        )
-
-
-
-        self.resize(
-
-            1250,
-
-            700
-
-        )
-
-
-
-        self.session = (
-
-            requests.Session()
-
-        )
-
-
-
-        self.resultados = []
-
-
-
-        # Credenciales preconfiguradas
-
-        self.usuario = "jose_estrada"
-
-        self.password = "OLi842cYKYM0k3Q07i"
-
-
-
-        # Estados de operaciones activas: nunca interrumpir una exportación.
+        self.session = requests.Session()
+        self._session_lock = threading.RLock()
+        self._autenticado = False
+        self._cerrando = False
+        self._verificacion_en_curso = False
         self._login_activo = False
         self._busqueda_activa = False
-        self._pdf_activo = False
         self._excel_activo = False
+        self.resultados = []
+        # Credenciales de la cuenta autorizada usada por esta instalación.
+        # IMPORTANTE: cualquier persona con acceso al código o ejecutable
+        # podría recuperarlas. No distribuir a usuarios no autorizados.
+        self.usuario = "jose_estrada"
+        self.password = "OLi842cYKYM0k3Q07i"
+        self.historial = HistorialExportaciones()
+        self.panel_metricas = PanelMetricas(self.historial.ruta)
 
         self.crear_interfaz()
-
-        # El monitor consulta GitHub sin congelar la ventana.
+        self.actualizar_panel_historial()
         self.monitor_actualizaciones = MonitorActualizaciones(
-            parent=self,
-            puede_notificar=self.puede_mostrar_actualizacion,
+            parent=self, puede_notificar=self.puede_mostrar_actualizacion
         )
 
-        # Iniciar sesión automáticamente
-
-        self.iniciar_sesion_automatica()
-
-
-
-
+        # Monitor de sesión separado del monitor de actualizaciones de GitHub.
+        self.temporizador_conexion = QTimer(self)
+        self.temporizador_conexion.setInterval(INTERVALO_CONEXION_MS)
+        self.temporizador_conexion.timeout.connect(self.verificar_conexion)
+        self.temporizador_conexion.start()
+        QTimer.singleShot(0, self.iniciar_sesion_automatica)
 
     def puede_mostrar_actualizacion(self):
         """La ventana de actualización solo aparece si no hay tareas en curso."""
         return not any((
             self._login_activo,
             self._busqueda_activa,
-            self._pdf_activo,
             self._excel_activo,
         ))
 
@@ -1639,6 +1535,7 @@ class DCOApp(QWidget):
 
 
         layout_principal = QVBoxLayout()
+        layout_principal.setContentsMargins(12, 10, 12, 10)
 
 
 
@@ -1723,6 +1620,9 @@ class DCOApp(QWidget):
             fila_busqueda
 
         )
+
+        # Indicador de meta diaria: datos del historial local de exportaciones.
+        layout_principal.addWidget(self.panel_metricas)
 
 
 
@@ -1830,22 +1730,6 @@ class DCOApp(QWidget):
 
 
 
-        self.pdf_button = QPushButton(
-
-            "ABRIR PDF"
-
-        )
-
-
-
-        self.pdf_button.clicked.connect(
-
-            self.abrir_pdf
-
-        )
-
-
-
         self.excel_button = QPushButton(
 
             "EXPORTAR A EXCEL"
@@ -1865,14 +1749,6 @@ class DCOApp(QWidget):
         fila_botones.addWidget(
 
             self.detalle_button
-
-        )
-
-
-
-        fila_botones.addWidget(
-
-            self.pdf_button
 
         )
 
@@ -1961,203 +1837,272 @@ class DCOApp(QWidget):
 
 
 
-        self.setLayout(
+        zona_trabajo = QWidget()
+        zona_trabajo.setLayout(layout_principal)
 
-            layout_principal
-
-        )
-
-
-
-
-
-    # ========================================================
-
-    # INICIAR SESIÓN AUTOMÁTICA
-
-    # ========================================================
-
-
-
-    def iniciar_sesion_automatica(
-
-        self
-
-    ):
-
-        self._login_activo = True
-
-        self.progreso.setValue(
-
-            20
-
-        )
-
-
-
-        hilo = threading.Thread(
-
-            target=self.login_hilo,
-
-            daemon=True
-
-        )
-
-
-
-        hilo.start()
+        divisor = QSplitter(Qt.Orientation.Horizontal, self)
+        divisor.addWidget(self.crear_panel_izquierdo())
+        divisor.addWidget(zona_trabajo)
+        divisor.setChildrenCollapsible(False)
+        divisor.setSizes([310, 1020])
+        contenedor = QVBoxLayout(self)
+        contenedor.setContentsMargins(4, 4, 4, 4)
+        contenedor.addWidget(divisor)
 
 
 
 
 
-    # ========================================================
 
-    # LOGIN HILO
+    def crear_panel_izquierdo(self):
+        panel = QFrame()
+        panel.setObjectName("PanelHistorial")
+        panel.setMinimumWidth(245)
+        panel.setMaximumWidth(480)
+        panel.setStyleSheet("""
+            QFrame#PanelHistorial { background-color: palette(base);
+                                    border-right: 1px solid palette(mid); }
+            QListWidget { border: 1px solid palette(mid); border-radius: 5px; }
+        """)
+        caja = QVBoxLayout(panel)
+        caja.setContentsMargins(10, 10, 10, 10)
+        titulo = QLabel("HISTORIAL DE EXPORTACIONES")
+        titulo.setStyleSheet("font-weight: 700; font-size: 13px;")
+        titulo.setWordWrap(True)
+        caja.addWidget(titulo)
+        self.conexion_estado = QLabel("● Conectando...")
+        self.conexion_estado.setStyleSheet("color: #bb8700; font-weight: 600;")
+        caja.addWidget(self.conexion_estado)
+        self.reconexion_button = QPushButton("RECONECTAR AL PORTAL")
+        self.reconexion_button.clicked.connect(self.reconectar_manualmente)
+        caja.addWidget(self.reconexion_button)
+        self.historial_busqueda = QLineEdit()
+        self.historial_busqueda.setPlaceholderText("Buscar expediente, propietario o licencia")
+        self.historial_busqueda.textChanged.connect(self.actualizar_panel_historial)
+        caja.addWidget(self.historial_busqueda)
+        self.historial_total = QLabel("0 registros recientes")
+        caja.addWidget(self.historial_total)
+        self.historial_lista = QListWidget()
+        self.historial_lista.itemSelectionChanged.connect(self.mostrar_detalle_historial)
+        self.historial_lista.itemDoubleClicked.connect(self.copiar_expediente_historial)
+        caja.addWidget(self.historial_lista, 3)
+        caja.addWidget(QLabel("DATOS GUARDADOS"))
+        self.historial_detalle = QTextEdit()
+        self.historial_detalle.setReadOnly(True)
+        self.historial_detalle.setMinimumHeight(155)
+        caja.addWidget(self.historial_detalle, 2)
+        btn = QPushButton("USAR EXPEDIENTE SELECCIONADO")
+        btn.clicked.connect(self.copiar_expediente_historial)
+        caja.addWidget(btn)
+        btn_archivo = QPushButton("LOCALIZAR EXCEL")
+        btn_archivo.clicked.connect(self.localizar_excel_historial)
+        caja.addWidget(btn_archivo)
+        nota = QLabel("Historial local de exportaciones confirmadas. No modifica Excel.")
+        nota.setWordWrap(True)
+        nota.setStyleSheet("color: palette(mid);")
+        caja.addWidget(nota)
+        return panel
 
-    # ========================================================
-
-
-
-    def login_hilo(
-
-        self
-
-    ):
-
-
-
+    def actualizar_panel_historial(self, *_):
+        texto = self.historial_busqueda.text().strip()
         try:
+            registros = self.historial.listar(texto)
+        except Exception as exc:
+            self.historial_total.setText(f"Error leyendo el historial: {exc}")
+            return
+        self.historial_lista.clear()
+        for reg in registros:
+            fecha = reg["fecha"].replace("T", " ")[:16]
+            nombre = reg.get("propietario", "")
+            item = QListWidgetItem(
+                f"{reg['expediente']}  ·  {fecha}\n{nombre}"
+            )
+            item.setData(Qt.ItemDataRole.UserRole, reg["id"])
+            self.historial_lista.addItem(item)
+        self.historial_total.setText(f"{len(registros)} registros (máximo 250)")
+        self.historial_detalle.clear()
 
+    def registro_historial_seleccionado(self):
+        item = self.historial_lista.currentItem()
+        return self.historial.obtener(item.data(Qt.ItemDataRole.UserRole)) if item else None
 
+    def mostrar_detalle_historial(self):
+        reg = self.registro_historial_seleccionado()
+        if not reg:
+            self.historial_detalle.clear()
+            return
+        campos = [
+            ("Exportado", reg["fecha"].replace("T", " ")[:19]),
+            ("Expediente", reg["expediente"]),
+            ("Propietario", reg["propietario"]),
+            ("Dirección", reg["direccion"]),
+            ("Zona", reg["zona"]),
+            ("Trámite", reg["tramite"]),
+            ("Licencia", reg["licencia"]),
+            ("Licencia suelo", reg["licencia_suelo"]),
+            ("Planificador", reg["planificador"]),
+            ("Ejecutor", reg["ejecutor"]),
+            ("Colegiado", reg["colegiado"]),
+            ("Hoja / fila", f"{reg['hoja']} / {reg['fila_excel']}"),
+            ("Excel", reg["archivo_excel"]),
+        ]
+        self.historial_detalle.setPlainText(
+            "\n".join(f"{nombre}: {dato}" for nombre, dato in campos if dato)
+        )
 
-            self.session = (
+    def copiar_expediente_historial(self, *_):
+        reg = self.registro_historial_seleccionado()
+        if not reg:
+            return
+        self.expediente_input.setText(reg["expediente"])
+        self.expediente_input.setFocus()
+        self.estado.setText("Expediente recuperado del historial; pulsa BUSCAR para consultarlo.")
 
-                requests.Session()
-
+    def localizar_excel_historial(self):
+        reg = self.registro_historial_seleccionado()
+        if reg and reg.get("archivo_excel") and os.path.isfile(reg["archivo_excel"]):
+            mostrar_archivo_en_explorador(reg["archivo_excel"])
+        else:
+            QMessageBox.information(
+                self, "Historial", "Selecciona una exportación cuyo archivo Excel todavía exista."
             )
 
+    def indicar_conexion(self, ok, mensaje=""):
+        self._autenticado = bool(ok)
+        self.conexion_estado.setText(
+            "● Portal conectado" if ok else "● Portal desconectado (reintentando)"
+        )
+        self.conexion_estado.setStyleSheet(
+            "color: #16834c; font-weight: 600;" if ok else
+            "color: #b13a39; font-weight: 600;"
+        )
+        self.buscar_button.setEnabled(ok and not self._busqueda_activa)
+        if mensaje:
+            self.estado.setText(mensaje)
 
+    def reconectar_manualmente(self):
+        """Reintenta el acceso con la cuenta integrada; no solicita credenciales."""
+        if self._login_activo or self._verificacion_en_curso:
+            return
+        self.iniciar_sesion_automatica()
 
-            self.session.get(
+    def _autenticar_con_bloqueo(self):
+        """Solo llamar mientras se mantiene self._session_lock."""
+        if not (self.usuario and self.password):
+            raise RuntimeError("No se han proporcionado las credenciales del portal.")
+        nueva_sesion = requests.Session()
+        r = nueva_sesion.get(LOGIN_URL, timeout=(10, 25))
+        r.raise_for_status()
+        respuesta = nueva_sesion.post(
+            LOGIN_URL,
+            data={"username": self.usuario, "password": self.password},
+            allow_redirects=True,
+            timeout=(10, 25),
+        )
+        respuesta.raise_for_status()
+        if "principal_2.php" not in respuesta.url:
+            nueva_sesion.close()
+            raise RuntimeError("El portal rechazó el inicio de sesión. Revisa tus credenciales.")
+        anterior = self.session
+        self.session = nueva_sesion
+        anterior.close()
+        self._autenticado = True
 
-                LOGIN_URL,
+    @staticmethod
+    def _respuesta_requiere_login(respuesta):
+        url_final = respuesta.url.lower().split("?", 1)[0]
+        if url_final.endswith("/login_2.php") or respuesta.status_code in (401, 403):
+            return True
+        comienzo = respuesta.text[:1600].lower().lstrip() if respuesta.content else ""
+        return (comienzo.startswith("<") and "username" in comienzo and
+                "password" in comienzo and "login" in comienzo)
 
-                timeout=30
-
-            )
-
-
-
-            respuesta = (
-
-                self.session.post(
-
-                    LOGIN_URL,
-
-                    data={
-
-                        "username": self.usuario,
-
-                        "password": self.password,
-
-                    },
-
-                    allow_redirects=True,
-
-                    timeout=30
-
+    def _solicitud_portal(self, metodo, url, *, requiere_json=False, **kwargs):
+        """Serializa requests.Session y renueva credenciales si caducó el acceso."""
+        with self._session_lock:
+            if not self._autenticado:
+                self._autenticar_con_bloqueo()
+                QApplication.postEvent(
+                    self, ConexionEvent(True, "Sesión del portal recuperada automáticamente.")
                 )
-
-            )
-
-
-
-            url_final = (
-
-                respuesta.url
-
-                or ""
-
-            )
-
-
-
-            if (
-
-                "principal_2.php"
-
-                in url_final
-
-            ):
-
-
-
-                mensaje = (
-
-                    "Sesión iniciada correctamente de forma automática."
-
+            kwargs.setdefault("timeout", (10, 30))
+            kwargs.setdefault("allow_redirects", True)
+            try:
+                respuesta = self.session.request(metodo, url, **kwargs)
+                if self._respuesta_requiere_login(respuesta):
+                    self._autenticado = False
+                    self._autenticar_con_bloqueo()
+                    respuesta = self.session.request(metodo, url, **kwargs)
+                    if self._respuesta_requiere_login(respuesta):
+                        raise RuntimeError("El portal sigue solicitando inicio de sesión.")
+                    QApplication.postEvent(
+                        self, ConexionEvent(True, "Se recuperó automáticamente la sesión vencida.")
+                    )
+                respuesta.raise_for_status()
+                if requiere_json:
+                    try:
+                        respuesta.json()
+                    except ValueError as exc:
+                        raise RuntimeError(
+                            "El portal devolvió una respuesta no válida (no es JSON)."
+                        ) from exc
+                return respuesta
+            except requests.RequestException:
+                self._autenticado = False
+                QApplication.postEvent(
+                    self, ConexionEvent(False, "Sin conexión con el portal; se reintentará automáticamente.")
                 )
+                raise
 
+    def verificar_conexion(self):
+        """Comprobación no bloqueante, cada 3 minutos y sin invadir tareas activas."""
+        if (self._cerrando or self._login_activo or self._busqueda_activa or
+                self._excel_activo or self._verificacion_en_curso or
+                not (self.usuario and self.password)):
+            return
+        self._verificacion_en_curso = True
+        threading.Thread(target=self._verificar_sesion_hilo, daemon=True).start()
 
+    def _verificar_sesion_hilo(self):
+        try:
+            with self._session_lock:
+                respuesta = None
+                if self._autenticado:
+                    respuesta = self.session.get(PRINCIPAL_URL, timeout=(8, 15))
+                if (respuesta is None or self._respuesta_requiere_login(respuesta) or
+                        "principal_2.php" not in respuesta.url):
+                    self._autenticado = False
+                    self._autenticar_con_bloqueo()
+                    texto = "Sesión recuperada automáticamente."
+                else:
+                    respuesta.raise_for_status()
+                    texto = "Portal conectado."
+            QApplication.postEvent(self, ConexionEvent(True, texto, monitor=True))
+        except Exception as exc:
+            QApplication.postEvent(self, ConexionEvent(False, f"Portal no disponible: {exc}", monitor=True))
 
-                exito = True
+    # ========================================================
+    # INICIO DE SESIÓN EN SEGUNDO PLANO
+    # ========================================================
 
+    def iniciar_sesion_automatica(self):
+        if self._login_activo:
+            return
+        self._login_activo = True
+        self.buscar_button.setEnabled(False)
+        self.estado.setText("Conectando con el portal DCO...")
+        self.progreso.setValue(20)
+        threading.Thread(target=self.login_hilo, daemon=True).start()
 
-
-            else:
-
-
-
-                mensaje = (
-
-                    "Error de auto-login. Revise las credenciales integradas."
-
-                )
-
-
-
-                exito = False
-
-
-
+    def login_hilo(self):
+        try:
+            with self._session_lock:
+                self._autenticar_con_bloqueo()
             QApplication.postEvent(
-
-                self,
-
-                LoginEvent(
-
-                    exito,
-
-                    mensaje
-
-                )
-
+                self, LoginEvent(True, "Sesión del portal iniciada correctamente.")
             )
-
-
-
-        except Exception as e:
-
-
-
-            QApplication.postEvent(
-
-                self,
-
-                LoginEvent(
-
-                    False,
-
-                    f"Error al conectar con el servidor: {e}"
-
-                )
-
-            )
-
-
-
-
+        except Exception as exc:
+            QApplication.postEvent(self, LoginEvent(False, f"No se pudo conectar: {exc}"))
 
     # ========================================================
 
@@ -2205,22 +2150,11 @@ class DCOApp(QWidget):
 
 
 
-        if not self.session.cookies:
-
-
-
+        if not self._autenticado:
             QMessageBox.warning(
-
-                self,
-
-                "No ha iniciado sesión",
-
-                "Espere a que el sistema se conecte."
-
+                self, "Portal sin conexión",
+                "Aún no se ha iniciado sesión. Pulsa RECONECTAR AL PORTAL."
             )
-
-
-
             return
 
 
@@ -2316,14 +2250,9 @@ class DCOApp(QWidget):
 
             respuesta = (
 
-                self.session.post(
-
-                    BUSQUEDA_URL,
-
-                    json=datos_busqueda,
-
-                    timeout=30
-
+                self._solicitud_portal(
+                    "POST", BUSQUEDA_URL,
+                    json=datos_busqueda, requiere_json=True,
                 )
 
             )
@@ -2346,11 +2275,8 @@ class DCOApp(QWidget):
 
 
 
-            except Exception:
-
-
-
-                datos = []
+            except ValueError as exc:
+                raise RuntimeError("El servidor devolvió JSON incorrecto.") from exc
 
 
 
@@ -2447,20 +2373,11 @@ class DCOApp(QWidget):
 
 
 
-            if event.exito:
-
-                self.buscar_button.setEnabled(True)
-
-            else:
-
-                QMessageBox.critical(
-
-                    self,
-
-                    "Error de Sesión",
-
-                    event.mensaje
-
+            self.indicar_conexion(event.exito, event.mensaje)
+            if not event.exito:
+                QMessageBox.warning(
+                    self, "Conexión al portal",
+                    event.mensaje + "\n\nPuedes pulsar RECONECTAR AL PORTAL."
                 )
 
 
@@ -2470,6 +2387,14 @@ class DCOApp(QWidget):
 
 
 
+
+        if event.type() == ConexionEvent.EVENT_TYPE:
+            if event.monitor:
+                self._verificacion_en_curso = False
+            # Evitar reemplazar el mensaje de una exportación activa.
+            mensaje = event.texto if not (self._excel_activo or self._busqueda_activa) else ""
+            self.indicar_conexion(event.ok, mensaje)
+            return True
 
         if (
 
@@ -2498,6 +2423,9 @@ class DCOApp(QWidget):
             ):
 
                 self._excel_activo = False
+                if isinstance(event.resultados, dict):
+                    self.actualizar_panel_historial()
+                    self.panel_metricas.refrescar()
                 self.excel_button.setEnabled(
 
                     True
@@ -2541,15 +2469,14 @@ class DCOApp(QWidget):
 
 
                 if ruta_final:
-
-                    mostrar_archivo_en_explorador(
-
-                        ruta_final
-
+                    mostrar_archivo_en_explorador(ruta_final)
+                if isinstance(event.resultados, dict) and event.resultados.get("historial_error"):
+                    QMessageBox.warning(
+                        self, "Historial local",
+                        "El Excel se guardó correctamente, pero no se pudo guardar "
+                        "el registro en el panel izquierdo:\n" +
+                        event.resultados["historial_error"],
                     )
-
-
-
                 return True
 
 
@@ -2634,11 +2561,7 @@ class DCOApp(QWidget):
             # ------------------------------------------------
 
             self._busqueda_activa = False
-            self.buscar_button.setEnabled(
-
-                True
-
-            )
+            self.buscar_button.setEnabled(self._autenticado)
 
 
 
@@ -2658,92 +2581,16 @@ class DCOApp(QWidget):
 
 
 
-            self.mostrar_resultados(
-
-                event.resultados
-
-            )
-
-
-
-            return True
-
-
-
-
-
-        if (
-
-            event.type()
-
-            == PdfEvent.EVENT_TYPE
-
-        ):
-
-            self._pdf_activo = False
-            self.progreso.setValue(
-
-                100
-
-            )
-
-
-
-            self.pdf_button.setEnabled(
-
-                True
-
-            )
-
-
-
-            if event.archivo:
-
-
-
-                abierto = abrir_archivo(
-
-                    event.archivo
-
-                )
-
-
-
-                if not abierto:
-
-
-
-                    QMessageBox.warning(
-
-                        self,
-
-                        "PDF",
-
-                        "El PDF fue descargado, "
-
-                        "pero no se pudo abrir automáticamente."
-
-                    )
-
-
-
+            if event.mensaje.startswith("Error en búsqueda:"):
+                QMessageBox.warning(self, "Consulta al portal", event.mensaje)
             else:
-
-
-
-                QMessageBox.warning(
-
-                    self,
-
-                    "PDF",
-
-                    event.mensaje
-
-                )
+                self.mostrar_resultados(event.resultados)
 
 
 
             return True
+
+
 
 
 
@@ -3133,247 +2980,6 @@ class DCOApp(QWidget):
 
     # ========================================================
 
-    # ABRIR PDF
-
-    # ========================================================
-
-
-
-    def abrir_pdf(
-
-        self
-
-    ):
-
-
-
-        datos = (
-
-            self.obtener_seleccionado()
-
-        )
-
-
-
-        if not datos:
-
-
-
-            return
-
-
-
-        identificador = valor(
-
-            datos,
-
-            "id"
-
-        )
-
-
-
-        if not identificador:
-
-
-
-            QMessageBox.warning(
-
-                self,
-
-                "PDF",
-
-                "El expediente no tiene un ID válido."
-
-            )
-
-
-
-            return
-
-
-
-        self._pdf_activo = True
-        self.pdf_button.setEnabled(
-
-            False
-
-        )
-
-
-
-        self.progreso.setValue(
-
-            20
-
-        )
-
-
-
-        self.estado.setText(
-
-            "Descargando PDF..."
-
-        )
-
-
-
-        hilo = threading.Thread(
-
-            target=self.pdf_hilo,
-
-            args=(identificador,),
-
-            daemon=True
-
-        )
-
-
-
-        hilo.start()
-
-
-
-
-
-    # ========================================================
-
-    # PDF HILO
-
-    # ========================================================
-
-
-
-    def pdf_hilo(
-
-        self,
-
-        identificador
-
-    ):
-
-
-
-        try:
-
-
-
-            url = (
-
-                PDF_URL
-
-                + "?id="
-
-                + str(
-
-                    identificador
-
-                )
-
-            )
-
-
-
-            respuesta = (
-
-                self.session.get(
-
-                    url,
-
-                    timeout=60
-
-                )
-
-            )
-
-
-
-            respuesta.raise_for_status()
-
-
-
-            if not respuesta.content:
-
-
-
-                raise Exception(
-
-                    "El servidor no devolvió contenido."
-
-                )
-
-
-
-            archivo = (
-
-                tempfile.NamedTemporaryFile(
-
-                    delete=False,
-
-                    suffix=".pdf"
-
-                )
-
-            )
-
-
-
-            archivo.write(
-
-                respuesta.content
-
-            )
-
-
-
-            archivo.close()
-
-
-
-            QApplication.postEvent(
-
-                self,
-
-                PdfEvent(
-
-                    archivo=archivo.name
-
-                )
-
-            )
-
-
-
-        except Exception as e:
-
-
-
-            QApplication.postEvent(
-
-                self,
-
-                PdfEvent(
-
-                    archivo=None,
-
-                    mensaje=(
-
-                        f"No se pudo descargar "
-
-                        f"el PDF: {e}"
-
-                    )
-
-                )
-
-            )
-
-
-
-
-
-    # ========================================================
-
     # OBTENER DATOS DE EDITAR EXPEDIENTE FINALIZADO
 
     # ========================================================
@@ -3438,11 +3044,9 @@ class DCOApp(QWidget):
 
             respuesta_busqueda = (
 
-                self.session.post(
-
-                    BUSQUEDA_EDITAR_FINALIZADO_URL,
-
-                    json={
+                self._solicitud_portal(
+                    "POST", BUSQUEDA_EDITAR_FINALIZADO_URL,
+                    requiere_json=True, json={
 
                         "columna": "expediente",
 
@@ -3540,11 +3144,9 @@ class DCOApp(QWidget):
 
         respuesta_datos = (
 
-            self.session.post(
-
-                DATOS_EDITAR_FINALIZADO_URL,
-
-                json={
+            self._solicitud_portal(
+                "POST", DATOS_EDITAR_FINALIZADO_URL,
+                requiere_json=True, json={
 
                     "id": identificador
 
@@ -3705,26 +3307,18 @@ class DCOApp(QWidget):
 
 
 
-            self.crear_fila_excel(
-
-                datos_completos
-
-            )
-
-
-
+            registro = self.crear_fila_excel(datos_completos)
+            error_historial = ""
+            try:
+                self.historial.guardar(registro)
+            except Exception as exc:
+                error_historial = str(exc)
             QApplication.postEvent(
-
                 self,
-
                 SearchEvent(
-
-                    [],
-
-                    "EXPORTACION_EXCEL_OK"
-
+                    {"registro": registro, "historial_error": error_historial},
+                    "EXPORTACION_EXCEL_OK",
                 )
-
             )
 
 
@@ -4769,14 +4363,38 @@ class DCOApp(QWidget):
 
 
 
-        wb.save(excel_path)
-        wb.close()
+        try:
+            wb.save(excel_path)
+        finally:
+            wb.close()
+        # El historial solo se registra DESPUÉS de guardar el Excel con éxito.
+        return {
+            "expediente": expediente_valor,
+            "propietario": propietario,
+            "direccion": direccion_excel,
+            "zona": zona,
+            "tramite": valor(datos, "nombre_tramite"),
+            "licencia": licencia,
+            "licencia_suelo": numero_licencia_suelo,
+            "planificador": planificador,
+            "ejecutor": ejecutor,
+            "colegiado": colegiado_planificado,
+            "archivo_excel": os.path.abspath(excel_path),
+            "hoja": ws.title,
+            "fila_excel": fila_destino,
+        }
 
 
 
 
 
 # ============================================================
+
+    def closeEvent(self, evento):
+        self._cerrando = True
+        self.temporizador_conexion.stop()
+        return super().closeEvent(evento)
+
 
 # EJECUTAR
 
@@ -4787,6 +4405,9 @@ class DCOApp(QWidget):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    # Nombre estable para los datos locales incluso tras cambiar de versión.
+    app.setOrganizationName("ControlDeObras")
+    app.setApplicationName("DCO_Expedientes")
 
     # Mostrar la aplicación inmediatamente: el monitor NO bloquea el inicio.
     ventana = DCOApp()
