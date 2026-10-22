@@ -40,6 +40,7 @@ from openpyxl.cell.cell import MergedCell
 # --- IMPORTAR EL ACTUALIZADOR DESDE TU OTRO ARCHIVO ---
 from actualizador import VERSION_ACTUAL, MonitorActualizaciones
 from metricas import PanelMetricas
+from feedback import MonitorFeedback
 
 
 
@@ -52,7 +53,7 @@ from metricas import PanelMetricas
 
 
 
-BASE_URL = "https://dco.dducaimunixela.org"
+BASE_URL = "https://dco-munixela.kodsoftware.com"
 
 
 
@@ -1497,6 +1498,11 @@ class DCOApp(QWidget):
             parent=self, puede_notificar=self.puede_mostrar_actualizacion
         )
 
+        # Monitor independiente de encuestas remotas: no interrumpe exportaciones.
+        self.monitor_feedback = MonitorFeedback(
+            self, puede_mostrar=self.puede_mostrar_actualizacion
+        )
+
         # Monitor de sesión separado del monitor de actualizaciones de GitHub.
         self.temporizador_conexion = QTimer(self)
         self.temporizador_conexion.setInterval(INTERVALO_CONEXION_MS)
@@ -1516,6 +1522,10 @@ class DCOApp(QWidget):
     def comprobar_actualizaciones_manualmente(self):
         """Botón opcional para comprobar la versión sin reiniciar DCO."""
         self.monitor_actualizaciones.comprobar(manual=True)
+
+
+    def mostrar_sugerencias(self):
+        self.monitor_feedback.enviar_sugerencia_manual()
 
 
     # ========================================================
@@ -1766,6 +1776,13 @@ class DCOApp(QWidget):
             self.comprobar_actualizaciones_manualmente
         )
         fila_botones.addWidget(self.actualizar_button)
+
+        # Sugerencias voluntarias; las campañas se reciben en segundo plano.
+        self.sugerencias_button = QPushButton("ENVIAR SUGERENCIA")
+        self.sugerencias_button.clicked.connect(
+            self.mostrar_sugerencias
+        )
+        fila_botones.addWidget(self.sugerencias_button)
 
         layout_principal.addLayout(
 
@@ -4393,6 +4410,7 @@ class DCOApp(QWidget):
     def closeEvent(self, evento):
         self._cerrando = True
         self.temporizador_conexion.stop()
+        self.monitor_feedback.detener()
         return super().closeEvent(evento)
 
 
@@ -4417,5 +4435,9 @@ if __name__ == "__main__":
     # Si está buscando o exportando, espera a terminar antes de avisar.
     QTimer.singleShot(1200, ventana.monitor_actualizaciones.iniciar)
     app.aboutToQuit.connect(ventana.monitor_actualizaciones.detener)
+
+    # Las encuestas se comprueban al inicio y cada 5 minutos.
+    QTimer.singleShot(0, ventana.monitor_feedback.iniciar)
+    app.aboutToQuit.connect(ventana.monitor_feedback.detener)
 
     sys.exit(app.exec())
